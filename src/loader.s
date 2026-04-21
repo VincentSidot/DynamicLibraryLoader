@@ -44,7 +44,7 @@ _greet:
     ; Load the function pointers from the s_LoaderFunctions struct
     save [rsp + LoadLibraryA],   [rcx]      ; Save LoadLibraryA / hModule
     save [rsp + FreeLibrary],    [rcx + 8]  ; Save FreeLibrary
-    save [rsp + GetProcAddress], [rcx + 16] ; Save GetProcAddress
+    save [rsp + GetProcAddress], [rcx + 16] ; Save GetProcAddress / ErrorFlag
 
     ; Load the arguments from the s_LoaderPath struct
     save [rsp + lpDllPath],      [rdx]      ; Save lpDllPath
@@ -73,22 +73,25 @@ _greet:
     ; Call lpEntryPoint    
     mov rcx, [rsp + lpVoidArgs]     ; lpVoidArgs (optional, can be null)
     call rax ; call lpEntryPoint
+    xor rax, rax ; Ignore return value of entry point
 
+free_library:
+    mov [rsp + GetProcAddress], rax ; Save rax
     ; Free the loaded module
-    mov rcx, [rsp + LoadLibraryA]  ; hModule
-    mov rax, [rsp + FreeLibrary]   ; FreeLibrary
+    mov rcx, [rsp + LoadLibraryA]   ; hModule
+    mov rax, [rsp + FreeLibrary]    ; FreeLibrary
     call rax
     test rax, rax
     jz bad_FreeLibrary ; If failed to free the module, exit with error
-
-    mov rax, 0 ; exit code 0
-    jmp done
+    
+    mov rax, [rsp + GetProcAddress] ; ErrorFlag
+    jmp done ; If ErrorFlag is set, skip setting exit code to 0 and exit with error
 bad_LoadLibraryA:
     mov rax, 1 ; exit code 1 for module load failure
     jmp done
 bad_GetProcAddress:
     mov rax, 2 ; exit code 2 for proc load failure
-    jmp done
+    jmp free_library ; Attempt to free the module if proc load failed
 bad_FreeLibrary:
     mov rax, 3 ; exit code 3 for FreeLibrary failure
 done:
