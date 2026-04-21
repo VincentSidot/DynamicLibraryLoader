@@ -87,19 +87,33 @@ fn run(dllPath: [*:0]const u8, entryPoint: [*:0]const u8, args: anytype) !void {
     log.debug("Function {s} returned: {d}", .{ entryPoint, ret });
 }
 
+fn printUsage(programName: []const u8) void {
+    log.info("Usage: {s} /path/to/dll <entry_point>", .{programName});
+}
+
 pub fn main(init: std.process.Init) !void {
-    _ = init;
+    const allocator = std.heap.smp_allocator;
 
-    const dllPath = "zig-out\\bin\\lib.dll";
-    const entryPoint = "displayBox";
+    const args = try init.minimal.args.toSlice(allocator);
 
-    const Args = extern struct {
-        text: [*:0]const u8,
-        title: [*:0]const u8,
-    };
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printUsage(args[0]);
+            return;
+        }
+    }
 
-    try run(dllPath, entryPoint, &Args{
-        .text = "Hello from the loader!",
-        .title = "Loader Message",
-    });
+    if (args.len < 2) {
+        log.err("Invalid number of arguments. Expected 2, got {d}", .{args.len - 1});
+        printUsage(args[0]);
+        return;
+    }
+
+    const dllPath = args[1];
+    var entryPoint: [*:0]const u8 = "entrypoint"; // Default entry point
+    if (args.len >= 3) {
+        entryPoint = args[2];
+    }
+
+    try run(dllPath, entryPoint, null);
 }
