@@ -11,12 +11,38 @@ extern "kernel32" fn VirtualFree(win.LPVOID, win.SIZE_T, win.DWORD) callconv(.wi
 extern "kernel32" fn VirtualProtect(win.LPVOID, win.SIZE_T, win.DWORD, *win.DWORD) callconv(.winapi) win.BOOL;
 
 const LoadLibraryFn = *const fn ([*:0]const u8) callconv(.winapi) ?win.HMODULE;
+const FreeLibraryFn = *const fn (win.HMODULE) callconv(.winapi) win.BOOL;
 const GetProcAddressFn = *const fn (win.HMODULE, [*:0]const u8) callconv(.winapi) ?win.FARPROC;
-const MessageBoxAFn = *const fn (?win.HWND, [*:0]const u8, [*:0]const u8, u32) callconv(.winapi) i32;
 
-fn run(dllPath: [*:0]const u8, entryPoint: [*:0]const u8) !void {
-    const LoaderFn = *const fn (LoadLibraryFn, GetProcAddressFn, [*:0]const u8, [*:0]const u8) callconv(.winapi) i32;
+const s_LoaderFunctions = extern struct {
+    loadLibrary: LoadLibraryFn,
+    freeLibrary: FreeLibraryFn,
+    getProcAddress: GetProcAddressFn,
+};
 
+const s_LoaderPath = extern struct {
+    dllPath: [*:0]const u8,
+    entryPoint: [*:0]const u8,
+};
+
+const lp_VoidArgs = ?*anyopaque;
+
+const LoaderFn = *const fn (*const s_LoaderFunctions, *const s_LoaderPath, lp_VoidArgs) callconv(.winapi) i32;
+
+fn run(dllPath: [*:0]const u8, entryPoint: [*:0]const u8, args: anytype) !void {
+
+    // Ensure args is a pointer type
+    const ArgsT = @TypeOf(args);
+    const info = @typeInfo(ArgsT);
+
+    const resolved: lp_VoidArgs = switch (info) {
+        .null => null,
+        .pointer => @ptrCast(@constCast(args)),
+        .array => @ptrCast(@constCast(&args)),
+        else => @compileError("Unsupported args type"),
+    };
+
+    // Constants
     const PAGE_EXECUTE_READ: win.DWORD = 0x20;
     const PAGE_READWRITE: win.DWORD = 0x04;
     const MEM_COMMIT: win.DWORD = 0x1000;
@@ -45,7 +71,18 @@ fn run(dllPath: [*:0]const u8, entryPoint: [*:0]const u8) !void {
     // Call the function from its new location.
     const fnPtr: LoaderFn = @ptrCast(mem);
 
-    const ret = fnPtr(&LoadLibraryA, &GetProcAddress, dllPath, entryPoint);
+    const loaderFunction: s_LoaderFunctions = .{
+        .loadLibrary = LoadLibraryA,
+        .freeLibrary = FreeLibrary,
+        .getProcAddress = GetProcAddress,
+    };
+
+    const loaderPath: s_LoaderPath = .{
+        .dllPath = dllPath,
+        .entryPoint = entryPoint,
+    };
+
+    const ret = fnPtr(&loaderFunction, &loaderPath, resolved);
 
     log.debug("Function {s} returned: {d}", .{ entryPoint, ret });
 }
@@ -56,7 +93,13 @@ pub fn main(init: std.process.Init) !void {
     const dllPath = "zig-out\\bin\\lib.dll";
     const entryPoint = "displayBox";
 
-    log.info("Hello, World!", .{});
+    const Args = extern struct {
+        text: [*:0]const u8,
+        title: [*:0]const u8,
+    };
 
-    try run(dllPath, entryPoint);
+    try run(dllPath, entryPoint, &Args{
+        .text = "Hello from the loader!",
+        .title = "Loader Message",
+    });
 }

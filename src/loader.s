@@ -1,35 +1,66 @@
 use64
 
+; Struct for arguments:
+
+; typedef struct {
+;     LoadLibraryFn loadLibraryA;
+;     FreeLibraryFn freeLibrary;
+;     GetProcAddressFn getProcAddress;
+; } s_LoaderFunctions;
+
+; typdef struct {
+;     const char* dllPath;
+;     const char* entryPoint;
+; } s_LoaderPath ;
+
+macro save dst, src {
+    mov rax, src
+    mov dst, rax
+}
 
 ; Expecting
-; - RCX: LoadLibraryA
-; - RDX: GetProcAddress
-; - R8: lpDllPath
-; - R9: lpEntryPoint
+; - RCX: *const s_LoaderFunctions
+; - RDX: *const s_LoaderPath
+; - R8:  *mut   void
 _greet:
     ; [0-32[     : for stack alignment
     ; [32]       : for LoadLibraryA
-    ; [40]       : for GetProcAddress
-    ; [48]       : for lpDllPath
-    ; [56]       : for lpEntryPoint
-    sub rsp, 8*9
+    ; [40]       : for FreeLibrary
+    ; [48]       : for GetProcAddress
+    ; [56]       : for lpDllPath
+    ; [64]       : for lpEntryPoint
+    ; [72]       : for lpVoidArgs (optional)
+    StackAllocationSize = 8*11 ; 88 bytes for stack variables
+    sub rsp, StackAllocationSize ; Allocate stack space for local variables
 
+    ; Define offsets for the stack variables
     LoadLibraryA   = 8*4 ; 32
-    GetProcAddress = 8*5 ; 40
-    lpDllPath      = 8*6 ; 48
-    lpEntryPoint   = 8*7 ; 56
+    FreeLibrary    = 8*5 ; 40
+    GetProcAddress = 8*6 ; 48
+    lpDllPath      = 8*7 ; 56
+    lpEntryPoint   = 8*8 ; 64
+    lpVoidArgs     = 8*9 ; 72
+
+    ; Load the function pointers from the s_LoaderFunctions struct
+    save [rsp + LoadLibraryA],   [rcx]      ; Save LoadLibraryA / hModule
+    save [rsp + FreeLibrary],    [rcx + 8]  ; Save FreeLibrary
+    save [rsp + GetProcAddress], [rcx + 16] ; Save GetProcAddress
+
+    ; Load the arguments from the s_LoaderPath struct
+    save [rsp + lpDllPath],      [rdx]      ; Save lpDllPath
+    save [rsp + lpEntryPoint],   [rdx + 8]  ; Save lpEntryPoint
     
-    mov [rsp + LoadLibraryA], rcx   ; Save LoadLibraryA
-    mov [rsp + GetProcAddress], rdx ; Save GetProcAddress
-    mov [rsp + lpDllPath], r8        ; Save lpDllPath
-    mov [rsp + lpEntryPoint], r9     ; Save lpEntryPoint
+    ; Load optional dll arguments if provided
+    mov [rsp + lpVoidArgs],     r8          ; Save lpVoidArgs (optional)
 
     ; Load dll from lpDllPath
     mov rcx, [rsp + lpDllPath]     ; lpDllPath
     mov rax, [rsp + LoadLibraryA]  ; LoadLibraryA
     call rax
     test rax, rax
-    jz bad_module_load ; If failed to load user32.dll, exit early
+    jz bad_LoadLibraryA ; If failed to load user32.dll, exit early
+
+    mov [rsp + LoadLibraryA], rax ; Save hModule for later FreeLibrary call
 
     ; Get address of lpEntryPoint
     mov rcx, rax                    ; hModule
@@ -37,19 +68,29 @@ _greet:
     mov rax, [rsp + GetProcAddress] ; GetProcAddress
     call rax                        ; call GetProcAddress
     test rax, rax
-    jz bad_proc_load ; If failed to get lpEntryPoint address, exit early
+    jz bad_GetProcAddress ; If failed to get lpEntryPoint address, exit early
 
     ; Call lpEntryPoint    
-    ; todo - we should pass pointer to the arguments struct here
+    mov rcx, [rsp + lpVoidArgs]     ; lpVoidArgs (optional, can be null)
     call rax ; call lpEntryPoint
+
+    ; Free the loaded module
+    mov rcx, [rsp + LoadLibraryA]  ; hModule
+    mov rax, [rsp + FreeLibrary]   ; FreeLibrary
+    call rax
+    test rax, rax
+    jz bad_FreeLibrary ; If failed to free the module, exit with error
 
     mov rax, 0 ; exit code 0
     jmp done
-bad_module_load:
+bad_LoadLibraryA:
     mov rax, 1 ; exit code 1 for module load failure
     jmp done
-bad_proc_load:
+bad_GetProcAddress:
     mov rax, 2 ; exit code 2 for proc load failure
+    jmp done
+bad_FreeLibrary:
+    mov rax, 3 ; exit code 3 for FreeLibrary failure
 done:
-    add rsp, 8*9 ; Restore stack
+    add rsp, StackAllocationSize ; Restore stack
     ret
