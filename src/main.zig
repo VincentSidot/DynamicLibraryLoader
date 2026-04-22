@@ -3,31 +3,18 @@ const std = @import("std");
 const log = std.log;
 const win = std.os.windows;
 
-extern "kernel32" fn LoadLibraryA([*:0]const u8) callconv(.winapi) ?win.HMODULE;
-extern "kernel32" fn GetProcAddress(win.HMODULE, [*:0]const u8) callconv(.winapi) ?win.FARPROC;
-extern "kernel32" fn FreeLibrary(win.HMODULE) callconv(.winapi) win.BOOL;
 extern "kernel32" fn VirtualAlloc(?win.LPVOID, win.SIZE_T, win.DWORD, win.DWORD) callconv(.winapi) ?win.LPVOID;
 extern "kernel32" fn VirtualFree(win.LPVOID, win.SIZE_T, win.DWORD) callconv(.winapi) win.BOOL;
 extern "kernel32" fn VirtualProtect(win.LPVOID, win.SIZE_T, win.DWORD, *win.DWORD) callconv(.winapi) win.BOOL;
 
-const LoadLibraryFn = *const fn ([*:0]const u8) callconv(.winapi) ?win.HMODULE;
-const FreeLibraryFn = *const fn (win.HMODULE) callconv(.winapi) win.BOOL;
-const GetProcAddressFn = *const fn (win.HMODULE, [*:0]const u8) callconv(.winapi) ?win.FARPROC;
-
-const s_LoaderFunctions = extern struct {
-    loadLibrary: LoadLibraryFn,
-    freeLibrary: FreeLibraryFn,
-    getProcAddress: GetProcAddressFn,
-};
-
-const s_LoaderPath = extern struct {
+const lp_VoidArgs = ?*anyopaque;
+const s_Args = extern struct {
     dllPath: [*:0]const u8,
     entryPoint: [*:0]const u8,
+    args: lp_VoidArgs,
 };
 
-const lp_VoidArgs = ?*anyopaque;
-
-const LoaderFn = *const fn (*const s_LoaderFunctions, *const s_LoaderPath, lp_VoidArgs) callconv(.winapi) i32;
+const LoaderFn = *const fn (*const s_Args) callconv(.winapi) u64;
 
 fn run(dllPath: [*:0]const u8, entryPoint: [*:0]const u8, args: anytype) !void {
 
@@ -71,18 +58,13 @@ fn run(dllPath: [*:0]const u8, entryPoint: [*:0]const u8, args: anytype) !void {
     // Call the function from its new location.
     const fnPtr: LoaderFn = @ptrCast(mem);
 
-    const loaderFunction: s_LoaderFunctions = .{
-        .loadLibrary = LoadLibraryA,
-        .freeLibrary = FreeLibrary,
-        .getProcAddress = GetProcAddress,
-    };
-
-    const loaderPath: s_LoaderPath = .{
+    const loaderPath: s_Args = .{
         .dllPath = dllPath,
         .entryPoint = entryPoint,
+        .args = resolved,
     };
 
-    const ret = fnPtr(&loaderFunction, &loaderPath, resolved);
+    const ret = fnPtr(&loaderPath);
 
     log.debug("Function {s} returned: {d}", .{ entryPoint, ret });
 }

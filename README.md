@@ -5,7 +5,7 @@
 - builds a sample DLL (`lib.dll`)
 - builds a CLI loader (`hijack.exe`)
 - assembles a tiny raw x64 loader stub with `fasm`
-- copies that stub into executable memory and uses it to `LoadLibraryA`, resolve an exported symbol, call it, and unload the DLL
+- copies that stub into executable memory and uses it to resolve `kernel32.dll` exports, call `LoadLibraryA` for a target DLL, resolve an exported symbol, call it, and unload the DLL
 
 Despite the name, this project does not inject into a remote process. It loads a DLL into the current process and calls one exported entry point by name.
 
@@ -60,8 +60,9 @@ You can also run the installed binary directly:
 1. `build.zig` assembles [src/loader.s](./src/loader.s) into a raw binary blob with `fasm`.
 2. `src/main.zig` embeds that blob with `@embedFile`.
 3. At runtime, `hijack.exe` allocates RW memory with `VirtualAlloc`, copies the blob into it, then switches the page to RX with `VirtualProtect`.
-4. The loader stub receives pointers to `LoadLibraryA`, `FreeLibrary`, `GetProcAddress`, the DLL path, the export name, and an optional user argument.
-5. The stub loads the DLL, resolves the export, calls it, then frees the library.
+4. The loader stub receives one pointer to a small argument struct containing the DLL path, export name, and optional user argument.
+5. The stub walks the process PEB loader list to find `kernel32.dll`, then parses its PE export table to resolve `GetProcAddress`, `LoadLibraryA`, and `FreeLibrary`.
+6. The stub loads the target DLL, resolves the requested export, calls it, then frees the library.
 
 ## Project Layout
 
@@ -75,11 +76,21 @@ You can also run the installed binary directly:
 
 ## Calling Convention
 
-The loader calls the resolved export using the Windows x64 ABI.
+The raw loader entry point is called using the Windows x64 ABI with this argument in `RCX`:
+
+```c
+typedef struct {
+    const char *dllPath;
+    const char *entryPoint;
+    void *args;
+} s_Args;
+```
+
+The loader then calls the resolved DLL export using the Windows x64 ABI.
 
 - The CLI currently passes `null` as the optional user argument.
 - The loader places that optional pointer in `RCX` before calling the export.
-- The sample DLL ignores that argument and still works.
+- The sample DLL declares no parameters and still works; a custom export can accept the pointer explicitly.
 
 A matching Zig export would look like:
 
@@ -89,12 +100,27 @@ export fn entrypoint(ctx: ?*anyopaque) callconv(.winapi) void {
 }
 ```
 
+## Loader Return Codes
+
+The loader returns a numeric status that `src/main.zig` currently logs at debug level:
+
+| Code | Meaning |
+| ---: | --- |
+| 0 | Success |
+| 1 | Could not find `kernel32.dll` through the PEB loader list |
+| 2 | Could not resolve `GetProcAddress` from `kernel32.dll` |
+| 3 | Could not resolve `LoadLibraryA` from `kernel32.dll` |
+| 4 | Could not resolve `FreeLibrary` from `kernel32.dll` |
+| 5 | `LoadLibraryA` failed for the target DLL |
+| 6 | `FreeLibrary` failed |
+| 7 | `GetProcAddress` failed for the requested target export |
+
 ## Current Limitations
 
 - The loader uses `LoadLibraryA`, so non-ASCII DLL paths are not handled correctly.
 - The assembly payload is hard-coded for x64 (`use64`), even though the Zig build exposes generic target selection.
+- The loader relies on current Windows x64 PEB/LDR and PE export table layouts.
 - Loader return codes are logged but not propagated as process exit codes by the CLI.
-- If symbol resolution fails after the DLL is loaded, the failure path does not currently call `FreeLibrary`.
 - The project has no automated tests at the moment.
 
 ## Notes
